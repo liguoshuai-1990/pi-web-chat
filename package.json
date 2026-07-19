@@ -1,12 +1,44 @@
 {
   "name": "pi-web-chat",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "A ChatGPT/Gemini-style web UI for the pi coding agent, powered by pi's RPC mode.",
   "type": "module",
   "main": "server.js",
+  "bin": {
+    "pi-web-chat": "bin/pi-web-chat.js"
+  },
+  "files": [
+    "server.js",
+    "bin/",
+    "public/",
+    "README.md",
+    "CHANGELOG.md",
+    "LICENSE"
+  ],
   "scripts": {
     "start": "node server.js",
-    "dev": "node --watch server.js"
+    "dev": "node --watch server.js",
+    "prepare": "chmod +x bin/pi-web-chat.js"
+  },
+  "keywords": [
+    "pi",
+    "coding-agent",
+    "chat",
+    "web-ui",
+    "rpc",
+    "ai"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/liguoshuai-1990/pi-web-chat.git"
+  },
+  "bugs": {
+    "url": "https://github.com/liguoshuai-1990/pi-web-chat/issues"
+  },
+  "homepage": "https://github.com/liguoshuai-1990/pi-web-chat#readme",
+  "license": "MIT",
+  "engines": {
+    "node": ">=18"
   },
   "dependencies": {
     "express": "^4.21.2",
