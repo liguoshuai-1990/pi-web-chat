@@ -1,0 +1,68 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>pi · Chat</title>
+  <link rel="stylesheet" href="/style.css">
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Ctext y='20' font-size='20'%3Eπ%3C/text%3E%3C/svg%3E">
+</head>
+<body data-cwd="">
+  <div class="app">
+    <!-- Sidebar -->
+    <aside class="sidebar">
+      <div class="sidebar-top">
+        <button class="btn-new" id="btnNew" title="新对话">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 5v14M5 12h14"/></svg>
+          <span>新对话</span>
+        </button>
+      </div>
+      <div class="sidebar-search">
+        <input id="sidebarSearch" type="text" placeholder="搜索会话…">
+      </div>
+      <div class="session-list" id="sessionList"></div>
+      <div class="sidebar-bottom">
+        <div><span id="connDot" style="color: var(--danger);">●</span>&nbsp; <span id="connLabel">未连接</span></div>
+        <div style="margin-top:4px;"><a href="https://pi.dev" target="_blank" rel="noopener">pi.dev</a></div>
+      </div>
+    </aside>
+
+    <!-- Main -->
+    <main class="main">
+      <div class="topbar">
+        <div class="session-name" id="topSessionName">新对话</div>
+        <button class="btn-ghost" id="modelPillWrap" title="工作目录">
+          <span id="cwdPill">~</span>
+        </button>
+        <div style="position:relative;">
+          <button class="model-pill" id="modelPill">选择模型</button>
+        </div>
+        <div class="model-menu" id="modelMenu"></div>
+      </div>
+
+      <div class="chat" id="chat">
+        <div id="emptyState" class="empty-state" style="display:flex;">
+          <div class="logo">π</div>
+          <h1>有什么可以帮你？</h1>
+          <p>我是 <strong>pi</strong> 编程助手，可以读写文件、运行命令、改代码。在下面输入你的需求，或选择左侧的历史会话继续。</p>
+          <div class="suggestions">
+            <div class="chip" data-prompt="列出当前目录下的所有文件，并告诉我这是什么项目">列出当前目录文件</div>
+            <div class="chip" data-prompt="阅读 README 或主要源文件，然后用一段话总结这个项目是做什么的">总结这个项目</div>
+            <div class="chip" data-prompt="帮我看看当前目录有没有什么可以改进的地方">代码审查</div>
+          </div>
+        </div>
+        <div class="chat-inner" id="chat-inner"></div>
+      </div>
+
+      <div class="composer">
+        <div class="composer-inner" id="composerInner">
+          <textarea id="composer" rows="1" placeholder="给 pi 发消息…  (Enter 发送，Shift+Enter 换行)"></textarea>
+          <button class="send-btn" id="sendBtn" title="发送">↑</button>
+        </div>
+        <div class="composer-hint">pi 会执行命令与读写你的文件 —— 请注意操作内容。</div>
+      </div>
+    </main>
+  </div>
+  <script src="/app.js"></script>
+</body>
+</html>
