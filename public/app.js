@@ -2,6 +2,23 @@
 // Connects to the WebSocket, renders streaming responses,
 // manages the session sidebar, and the composer.
 
+// Global error catcher to report front-end errors back to node console for debug
+window.onerror = function (message, source, lineno, colno, error) {
+  fetch("/api/log-error", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      message,
+      source,
+      lineno,
+      colno,
+      error: error ? { message: error.message, stack: error.stack } : null,
+      userAgent: navigator.userAgent
+    })
+  }).catch(() => {});
+  return false; // let it still output to browser console too
+};
+
 const API = ""; // same origin
 const state = {
   ws: null,
@@ -516,6 +533,12 @@ function handlePiMessage(obj) {
     case "agent_start":
       state.streaming = true;
       setComposerAborting(true);
+      // Refresh opportunistically; pi's session file may not be fsync'd yet
+      // at agent_start (in which case this refresh is a no-op), but the
+      // later agent_settled branch refreshes too — so a new conversation
+      // shows up in the sidebar as soon as the reply finishes, without
+      // needing a manual page reload.
+      refreshSessions();
       break;
     case "agent_end":
       finalizeStreamingMsg();
@@ -525,18 +548,57 @@ function handlePiMessage(obj) {
       setComposerAborting(false);
       refreshSessions(); // titles may have changed
       break;
-    case "message_start":
+    case "message_start": {
+      // Only open an assistant streaming block when the message is actually
+      // an assistant message. pi also emits message_start for the echoed
+      // user message, and before this distinction we'd create an empty "pi"
+      // bubble for every user turn — which showed up as a blank assistant
+      // message. User bubbles are rendered locally in submitPrompt(), so
+      // ignore user echoes here entirely.
+      const m = obj.message;
+      if (m && m.role !== "assistant") break;
       ensureStreamingMsg();
+      // Each turn within one agent reply gets its own message_start, so reset
+      // the text/thinking accumulators here so text_end's overwrite (and
+      // text_delta accumulation) only reflect THIS message, not a stale
+      // one from the previous turn. Tool-call blocks persist across the
+      // whole reply (keyed by toolCallId) and stay visible.
+      state.streamingText = "";
+      state.streamingThinking = "";
+      // NOTE: do NOT pre-fill streamingText from message.content here.
+      // pi sends the full content on message_start for assistant turns but
+      // then also streams the same text via text_delta → pre-filling would
+      // duplicate it ("WS_OKWS_OK"). We rely on text_delta for incremental
+      // display and on text_end.content for the final, authoritative text.
       break;
-    case "message_end":
-      // After per-message teardown; keep streamingMsg until agent_end in case
-      // of more turns. We clear text/thinking already.
+    }
+    case "message_end": {
+      // pi's message_end carries the final message object, which includes
+      // stopReason. If the model errored (bad model, rate limit, network),
+      // pi emits assistant messages with stopReason === "error" AND empty
+      // content — which otherwise renders as a blank pi bubble. Surface
+      // those failures explicitly so the user isn't left staring at
+      // an empty reply.
+      const m = obj.message;
+      if (m && m.role === "assistant" && m.stopReason === "error" && !state.streamingText) {
+        state.streamingText = "⚠️ 生成失败（模型返回错误）。可能是当前模型不可用，请从右上角切换一个模型后重试。";
+        refreshStreamingContent();
+      }
       break;
+    }
     case "message_update": {
       const ev = obj.assistantMessageEvent;
       if (!ev) break;
       if (ev.type === "text_delta") {
         state.streamingText += ev.delta;
+        refreshStreamingContent();
+      } else if (ev.type === "text_end") {
+        // Authoritative final text for this content slot. Overwrite any
+        // accumulated/delta text so we display exactly what the model
+        // produced (handles non-streamed replies where deltas never come,
+        // and avoids duplicates when both message_start.content and deltas
+        // carried the same string).
+        if (typeof ev.content === "string") state.streamingText = ev.content;
         refreshStreamingContent();
       } else if (ev.type === "thinking_delta" || ev.type === "thinking_start" || ev.type === "thinking_end") {
         // For thinking we accumulate deltas; thinking_delta carries .delta
@@ -546,12 +608,27 @@ function handlePiMessage(obj) {
         refreshStreamingContent();
       } else if (ev.type === "toolcall_start") {
         ensureStreamingMsg();
-        const call = ev.toolCall || { id: obj.toolCallId, name: obj.toolName, arguments: obj.args };
-        const block = makeToolBlockFromCall(call);
-        // insert by rebuilding content
-        refreshStreamingContent();
+        const call = ev.toolCall || { id: obj.toolCallId || ev.id, name: obj.toolName, arguments: obj.args };
+        // args may be incomplete until toolcall_end; we fill what we have now
+        // and patch the head display on toolcall_end.
+        ensureToolBlock(call.id, call.name, call.arguments);
+      } else if (ev.type === "toolcall_delta") {
+        // Streaming function-call argument JSON. We don't render it live
+        // (JSON fragments are not useful UX), but make sure the tool block
+        // exists so toolcall_end has somewhere to write into.
+        const id = obj.toolCallId || ev.id;
+        ensureToolBlock(id, obj.toolName || ev.toolCall?.name, obj.args);
       } else if (ev.type === "toolcall_end") {
-        // already added on _start
+        // Authoritative final toolCall object (with full arguments). Patch
+        // the block head so the displayed args are the final ones, not the
+        // partial ones we got at toolcall_start.
+        const call = ev.toolCall || { id: obj.toolCallId, name: obj.toolName, arguments: obj.args };
+        const id = call.id || obj.toolCallId;
+        const tc = state.activeToolCalls.get(id);
+        if (tc) {
+          const argsEl = tc.head.querySelector(".args");
+          if (argsEl) argsEl.textContent = summaryArgs(call.name, call.arguments);
+        }
       }
       break;
     }
@@ -670,21 +747,21 @@ function setComposerAborting(yes) {
 function submitPrompt() {
   const ta = $("#composer");
   const text = ta.value.trim();
+  const hint = $(".composer-hint");
   if (!text) return;
   if (!state.wsConnected) {
-    // Briefly nudge the user instead of silently dropping input.
-    const hint = $("#composerInner");
-    if (hint) {
-      hint.style.boxShadow = "0 0 0 2px var(--danger)";
-      setTimeout(() => { hint.style.boxShadow = ""; }, 350);
-    }
+    if (hint) hint.textContent = "发送失败：WebSocket 未连接。正在尝试重连…";
+    const box = $("#composerInner");
+    if (box) { box.style.boxShadow = "0 0 0 2px var(--danger)"; setTimeout(() => { box.style.boxShadow = ""; }, 350); }
     return;
   }
   if (state.streaming) {
-    // If streaming, treat a click as "stop"
+    if (hint) hint.textContent = "中止当前生成中…";
     sendWs({ type: "abort" });
     return;
   }
+  
+  if (hint) hint.textContent = "pi 会执行命令与读写你的文件 —— 请注意操作内容。"; // restore default
   // Render the user's message locally for instant feedback.
   appendMessageNode("user", { text });
   ta.value = "";
@@ -771,7 +848,13 @@ function init() {
   $("#sendBtn").disabled = true;
   connectWs({});
   showEmptyState(true);
-  // pull current state once:\n  setTimeout(() => sendWs({ type: "get_state" }), 300);
+  // Pull the current pi state (model, session id, thinking level) once the
+  // socket is open. connectWs() registers onopen asynchronously; defer long
+  // enough that the writable is ready. (An earlier version wrote the `\n` as
+  // literal backslash-n inside a single-line comment, so setTimeout never ran
+  // and the model pill never populated.)
+  setTimeout(() => sendWs({ type: "get_state" }), 400);
+  setTimeout(() => sendWs({ type: "get_available_models" }), 600);
 }
 
 document.addEventListener("DOMContentLoaded", init);

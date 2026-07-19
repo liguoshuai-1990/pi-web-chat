@@ -124,17 +124,35 @@ const app = express();
 app.use(express.json({ limit: "50mb" }));
 app.use(express.static(path.join(__dirname, "public")));
 
-// Scan ALL subdirectories of SESSIONS_DIR rather than guessing the folder
-// name pi encodes for a given cwd. Each session file's header carries its
-// real `cwd`, so we read headers and group/return by cwd.
+// Endpoint to catch front-end errors for deep diagnostics
+app.post("/api/log-error", (req, res) => {
+  const { message, source, lineno, colno, error, userAgent } = req.body;
+  const logStr = `\n[CLIENT ERROR] ${new Date().toISOString()}\nMessage: ${message}\nSource: ${source}:${lineno}:${colno}\nError: ${JSON.stringify(error)}\nUA: ${userAgent}\n`;
+  process.stderr.write(logStr);
+  res.json({ ok: true });
+});
+
+// Scan SESSIONS_DIR for .jsonl files in BOTH the root AND every subdirectory.
+// Why both? Because pi stores sessions under a cwd-encoded subdir (e.g.
+// `--home-zrlgs--`) when left to its own device, but our server passes
+// `--session-dir` directly — in that mode pi drops new session files straight
+// into the directory root (no cwd subdir). So to robustly list every session
+// regardless of how it got there, we walk the whole tree: root + subdirs.
 async function listAllSessionFiles() {
   if (!existsSync(SESSIONS_DIR)) return [];
   const files = [];
-  const subdirs = (await readdir(SESSIONS_DIR, { withFileTypes: true }))
-    .filter(d => d.isDirectory());
+
+  // Root-level .jsonl files (created when we pass --session-dir to pi).
+  const top = await readdir(SESSIONS_DIR, { withFileTypes: true }).catch(() => []);
+  for (const e of top) {
+    if (e.isFile() && e.name.endsWith(".jsonl")) files.push(path.join(SESSIONS_DIR, e.name));
+  }
+
+  // Subdirectory .jsonl files (created by pi itself when cwd is encoded).
+  const subdirs = top.filter(d => d.isDirectory());
   for (const d of subdirs) {
     const dp = path.join(SESSIONS_DIR, d.name);
-    const names = (await readdir(dp)).filter(f => f.endsWith(".jsonl"));
+    const names = (await readdir(dp).catch(() => [])).filter(f => f.endsWith(".jsonl"));
     for (const n of names) files.push(path.join(dp, n));
   }
   return files;
