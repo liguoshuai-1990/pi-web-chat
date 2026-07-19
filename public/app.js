@@ -219,9 +219,10 @@ function renderSidebar(sessions) {
     const when = s.timestamp ? new Date(s.timestamp).toLocaleString("zh-CN", { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" }) : "";
     const item = el("div", {
       class: "session-item" + (s.file === state.currentSessionFile ? " active" : ""),
+      dataset: { file: s.file },
+      title: s.file,                       // hover tooltip = raw jsonl path
       onclick: () => loadSession(s.file),
     }, [
-      el("span", { class: "dot", text: "●" }),
       el("div", { class: "title" }, [
         el("div", { text: title }),
         el("div", { class: "meta", text: `${when} · ${s.messageCount || 0} 条` }),
@@ -440,8 +441,19 @@ function connectWs(opts = {}) {
   const url = `${proto}://${location.host}/ws?cwd=${cwd}${sess}`;
   const ws = new WebSocket(url);
   state.ws = ws;
-  ws.onopen = () => { state.wsConnected = true; $("#connDot").style.color = "var(--accent)"; $("#connDot").title = "已连接"; };
-  ws.onclose = () => { state.wsConnected = false; $("#connDot").style.color = "var(--danger)"; $("#connDot").title = "已断开"; };
+  const setConn = (ok) => {
+    state.wsConnected = ok;
+    const dot = $("#connDot");
+    const label = $("#connLabel");
+    if (dot) dot.style.color = ok ? "var(--accent)" : "var(--danger)";
+    if (label) label.textContent = ok ? "已连接" : "已断开";
+    // disable the send button while disconnected
+    const btn = $("#sendBtn");
+    if (btn && !state.streaming) btn.disabled = !ok;
+  };
+  ws.onopen = () => setConn(true);
+  ws.onclose = () => setConn(false);
+  ws.onerror = () => setConn(false);
   ws.onmessage = (ev) => {
     let obj;
     try { obj = JSON.parse(ev.data); } catch { return; }
@@ -717,10 +729,15 @@ function init() {
   });
 
   refreshSessions();
+  // start in the disconnected state; connectWs will flip to green on open.
+  const initDot = $("#connDot");
+  const initLabel = $("#connLabel");
+  if (initDot) initDot.style.color = "var(--danger)";
+  if (initLabel) initLabel.textContent = "连接中…";
+  $("#sendBtn").disabled = true;
   connectWs({});
   showEmptyState(true);
-  // pull current state once:
-  setTimeout(() => sendWs({ type: "get_state" }), 300);
+  // pull current state once:\n  setTimeout(() => sendWs({ type: "get_state" }), 300);
 }
 
 document.addEventListener("DOMContentLoaded", init);
