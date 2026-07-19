@@ -430,31 +430,54 @@ function finalizeStreamingMsg() {
   state.activeToolCalls.clear();
 }
 
-// ---- WebSocket ----
+// Each generation of WebSocket gets its own id; late stragglers from
+// a previous-generation ws are silently dropped to keep state consistent.
+let wsGen = 0;
+
 function connectWs(opts = {}) {
   if (state.ws) {
-    try { state.ws.onclose = null; state.ws.close(); } catch {}
+    try {
+      // Suppress onclose so the connection indicator doesn't flicker to red
+      // while a new socket is opening.
+      state.ws._suppressOnclose = true;
+      state.ws.close();
+    } catch {}
   }
+  const myGen = ++wsGen;
   const proto = location.protocol === "https:" ? "wss" : "ws";
   const cwd = encodeURIComponent(state.cwd || "");
   const sess = opts.session ? `&session=${encodeURIComponent(opts.session)}` : "";
+  // When user clicks "new session", pre-flush any "stuck streaming" state
+  // from the previous connection so the new connection starts clean.
+  if (!opts.session) {
+    state.streaming = false;
+    state.streamingText = "";
+    state.streamingThinking = "";
+    state.streamingMsg = null;
+    state.activeToolCalls.clear();
+  }
   const url = `${proto}://${location.host}/ws?cwd=${cwd}${sess}`;
   const ws = new WebSocket(url);
   state.ws = ws;
+  ws._gen = myGen;
   const setConn = (ok) => {
+    if (ws._gen !== wsGen) return; // ignore stragglers from a previous socket
     state.wsConnected = ok;
     const dot = $("#connDot");
     const label = $("#connLabel");
     if (dot) dot.style.color = ok ? "var(--accent)" : "var(--danger)";
     if (label) label.textContent = ok ? "已连接" : "已断开";
-    // disable the send button while disconnected
     const btn = $("#sendBtn");
     if (btn && !state.streaming) btn.disabled = !ok;
   };
   ws.onopen = () => setConn(true);
-  ws.onclose = () => setConn(false);
+  ws.onclose = () => {
+    if (ws._suppressOnclose) return;
+    setConn(false);
+  };
   ws.onerror = () => setConn(false);
   ws.onmessage = (ev) => {
+    if (ws._gen !== wsGen) return; // drop stragglers
     let obj;
     try { obj = JSON.parse(ev.data); } catch { return; }
     handlePiMessage(obj);
@@ -647,7 +670,16 @@ function setComposerAborting(yes) {
 function submitPrompt() {
   const ta = $("#composer");
   const text = ta.value.trim();
-  if (!text || !state.wsConnected) return;
+  if (!text) return;
+  if (!state.wsConnected) {
+    // Briefly nudge the user instead of silently dropping input.
+    const hint = $("#composerInner");
+    if (hint) {
+      hint.style.boxShadow = "0 0 0 2px var(--danger)";
+      setTimeout(() => { hint.style.boxShadow = ""; }, 350);
+    }
+    return;
+  }
   if (state.streaming) {
     // If streaming, treat a click as "stop"
     sendWs({ type: "abort" });
@@ -657,9 +689,8 @@ function submitPrompt() {
   appendMessageNode("user", { text });
   ta.value = "";
   autoResize();
-  // Optionally set the session name from the first prompt.
+  // Set session name from the first prompt of a brand-new session.
   if (state.currentSessionFile == null) {
-    // pick a short title from the first message
     sendWs({ type: "set_session_name", name: text.slice(0, 60).replace(/\s+/g, " ") });
   }
   sendWs({ type: "prompt", message: text });
@@ -687,6 +718,9 @@ function init() {
     connectWs({}); // no session -> pi creates a new one
     $("#topSessionName").textContent = "新对话";
     state.currentSessionFile = null;
+    // Pull the updated sidebar immediately so the just-opened session
+    // appears as soon as pi reports back (and on subsequent resolves).
+    refreshSessions();
   });
 
   $("#sendBtn").addEventListener("click", submitPrompt);
