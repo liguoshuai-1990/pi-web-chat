@@ -79,3 +79,40 @@ pi-web-chat/
 ## 📝 License
 
 MIT
+
+---
+
+## 🛠️ Systemd 服务（可选）
+
+若希望开机自启、后台常驻、重启自愈，可安装为 user-level systemd 服务（无需 sudo）：
+
+```bash
+# 从项目根目录运行
+./scripts/install-service.sh 3000
+
+# 或自定义端口（默认 3000）：
+./scripts/install-service.sh 8080
+```
+
+脚本会：
+1. 在 `~/.config/systemd/user/pi-web-chat.service` 生成 unit
+2. `systemctl --user daemon-reload && systemctl --user enable --now pi-web-chat`
+3. 设置 `Restart=on-failure` 自动重启
+
+查看状态 / 日志：
+```bash
+systemctl --user status pi-web-chat
+journalctl --user -u pi-web-chat -f
+```
+
+> ⚠️ **Linger**：systemd user 服务默认随登录会话结束。若需 **开机自启 / 登出后继续跑**，需一次性启用：
+> ```bash
+> sudo loginctl enable-linger $USER
+> ```
+
+卸载：
+```bash
+systemctl --user disable --now pi-web-chat
+rm ~/.config/systemd/user/pi-web-chat.service
+systemctl --user daemon-reload
+```

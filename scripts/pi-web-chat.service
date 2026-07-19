@@ -1,0 +1,47 @@
+[Unit]
+Description=pi-web-chat (pi RPC web UI)
+Documentation=https://github.com/liguoshuai-1990/pi-web-chat
+# Run after the user session / network is available (no-op for user systemd
+# units that run after the user logs in).
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+# Project lives in $HOME/projects/pi-web-chat — override with `WorkingDirectory=`
+# in an override unit or in install-service.sh if you keep it elsewhere.
+# We don't hardcode the path here so the file is portable across machines /
+# forks; the install script substitutes it at install time.
+WorkingDirectory=%h/projects/pi-web-chat
+
+# Same reasoning for the Node binary — prefer what Node.js EnvFile says if
+# the user has nvm/fnm; otherwise rely on /usr/bin/node being on PATH.
+ExecStart=/usr/bin/env node server.js
+
+# Allow overriding via environment files / drop-ins without editing this
+# unit. PORT, PI_BIN, PI_SESSIONS_DIR etc. are honored by server.js.
+Environment=PORT=3000
+Environment=NODE_ENV=production
+Environment=PI_SKIP_VERSION_CHECK=1
+
+# Logging: stdout/stderr go to journald. `journalctl --user -u pi-web-chat -f`.
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=pi-web-chat
+
+# Restart on any failure; back off so we don't tight-loop if node is broken.
+Restart=on-failure
+RestartSec=3
+
+# Hardening.
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=read-only
+# pi itself reads/writes ~/.pi (sessions) and may want to read source files
+# in $HOME via cwd. Read-only home blocks that — keep home writable for
+# the agent, but limit to the obvious dirs the agent reaches into.
+ReadWritePaths=%h/.pi %h/.npm-global
+
+[Install]
+WantedBy=default.target
